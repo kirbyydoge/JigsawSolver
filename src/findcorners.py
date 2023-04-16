@@ -8,7 +8,7 @@ import itertools
 FIND_MAX_WIDTH = 10
 
 def angle(p0, p1, p2, acute=True):
-    v0 = (p1[0] - p0[0], p1[1] - p0[1])
+    v0 = (p0[0] - p1[0], p0[1] - p1[1])
     v1 = (p2[0] - p1[0], p2[1] - p1[1])
     # Adding arbitrarily large epsilon value to fix floating point inaccuracy (clamp [-1, 1])
     if acute:
@@ -78,10 +78,10 @@ def pick_local_maxima(points, corner_scores, image_shape, window_width):
             local_maxima.add((max_i, max_j))
     return local_maxima
 
-def get_tiles(gray_image):
-    gray   = cv.medianBlur(gray_image, ksize=5)
+def get_tiles(img):
+    gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
     _, thresh = cv.threshold(gray, 230, 255, cv.THRESH_BINARY_INV)
-    thresh = cv.blur(thresh, ksize=(3, 3))
+    # thresh = cv.blur(thresh, ksize=(3, 3))
 
     contours, _ = cv.findContours(thresh.copy(), cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE)
 
@@ -98,20 +98,25 @@ def get_tiles(gray_image):
 
     # Parse pieces into tiles such that each tile only has 1 piece
     tiles = []
+    color_tiles = []
     for i in range(len(contours)):
         x, y, w, h = cv.boundingRect(contours[i]) 
         if w < 10 and h < 10:
             continue
-        shape, tile = np.zeros(thresh.shape[:2]), np.zeros((300,300), 'uint8') 
-        cv.drawContours(shape, [contours[i]], -1, color=1, thickness=-1)
-        shape = (vis[:,:,1] * shape[:,:])[y:y+h, x:x+w] 
+        shape, tile, color_tile = np.zeros(thresh.shape[:2]), np.zeros((300,300), 'uint8'), np.zeros((300,300,3), 'uint8') 
+        cv.drawContours(shape, [contours[i]], -1, 1, -1)
+        color_shape = np.zeros_like(img)
+        color_shape[shape == 1] = img[shape == 1]
+        shape = (vis[:,:,1] * shape[:,:])[y:y+h, x:x+w]
+        color_shape = color_shape[y:y+h, x:x+w]
         tile[(300-h)//2:(300-h)//2+h , (300-w)//2:(300-w)//2+w] = shape
+        color_tile[(300-h)//2:(300-h)//2+h , (300-w)//2:(300-w)//2+w] = color_shape
         tiles.append(tile)
-    return tiles
+        color_tiles.append(color_tile)
+    return tiles, color_tiles
 
 def get_corners(img):
-    gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-    tiles = get_tiles(gray)
+    tiles, color_tiles = get_tiles(img)
 
     tile_corners = []
     for idx, image in enumerate(tiles):
@@ -172,13 +177,14 @@ def get_corners(img):
                 cur_max = score
                 max_list = subset
         tile_corners.append(max_list)
-    return tiles, tile_corners
+    return tiles, tile_corners, color_tiles
 
 if __name__ == "__main__":
     img = cv.imread("./res/test0.png")
-    tiles, tile_corners = get_corners(img)
+    tiles, tile_corners, color_tiles = get_corners(img)
     for i in range(len(tiles)):
-        tile = cv.cvtColor(tiles[i], cv.COLOR_GRAY2BGR)
+        # tile = cv.cvtColor(tiles[i], cv.COLOR_GRAY2BGR)
+        tile = color_tiles[i]
         corners = tile_corners[i]
         for point in corners:
             cv.circle(tile, (point[1], point[0]), 10, (0, 0, 255), -1)
