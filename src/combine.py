@@ -117,6 +117,24 @@ def new_pixel(x, y, theta, img_width, img_height):
     y_new = x_adj * sin + y_adj * cos + img_height/2
     return (int(y_new), int(x_new))
 
+def rotate_complete(tile, sides, count):
+    count = count % 4
+    if count == 0:
+        return tile, sides
+    elif count == 1:
+        rotation = cv.ROTATE_90_CLOCKWISE
+    elif count == 2:
+        rotation = cv.ROTATE_180
+    else:
+        rotation = cv.ROTATE_90_COUNTERCLOCKWISE
+    new_sides = []
+    for side in np.roll(sides, count):
+        l_corner = new_pixel(side[0][1], side[0][0], count * math.pi / 2, tile.shape[1], tile.shape[0])
+        r_corner = new_pixel(side[1][1], side[1][0], count * math.pi / 2, tile.shape[1], tile.shape[0])
+        new_sides.append((l_corner, r_corner))
+    new_tile = cv.rotate(tile, rotation)
+    return new_tile, new_sides
+
 def rotate(tile, corner, count):
     count = count % 4
     if count == 0:
@@ -169,6 +187,21 @@ def combine_angle(corners_src, side_src, corners_tgt, side_tgt):
     # cv.imshow("edwn", end_down)
     # cv.waitKey(0)
     return fc.angle(endpoint_up, (0, 0), endpoint_down)
+    
+def combine_on_right_or_down(anch, anch_row, anch_col, tgt, tgt_row, tgt_col):
+    row_len = max(anch_row + tgt.shape[0] - tgt_row, anch.shape[0])
+    col_len = max(anch_col + tgt.shape[1] - tgt_col, anch.shape[1])
+    combined_img = np.zeros((row_len, col_len, 3), np.uint8)
+    combined_img[0:anch.shape[0], 0:anch.shape[1]] = anch
+    cmb_row = anch_row - tgt_row
+    cmb_col = anch_col - tgt_col
+    for i in range(tgt.shape[0]):
+        for j in range(tgt.shape[1]):
+            if sum(combined_img[cmb_row+i, cmb_col+j]) == 0:
+                combined_img[cmb_row+i, cmb_col+j] = tgt[i, j]
+            elif sum( tgt[i, j]) != 0:
+                combined_img[cmb_row+i, cmb_col+j] = (combined_img[cmb_row+i, cmb_col+j] + tgt[i, j]) / 2
+    return combined_img
 
 SIM_INCREASING = 1
 SIM_DECREASING = 0
@@ -276,24 +309,70 @@ if __name__ == "__main__":
         islands.append([(0, 0, matching_pairs[0][0][0], 0)])
         return len(islands)-1, 0, matching_pairs[0]
 
+    matched_locs = {}
     while len(matching_pairs) > 0:
         island_idx, arr_idx, match = locate_next_match()
         src_idx, src_side = match[0]
         tgt_idx, tgt_side = match[1]
         row, col, _, top = islands[island_idx][arr_idx]
         move_dir = rotate_point((1, 0), top - src_side, shape=(0, 0))
-        islands[island_idx].append((move_dir[0] + row, move_dir[1] + col, tgt_idx, (2 - src_side + tgt_side - top) % 4))
+        if tgt_idx not in matched_locs or matched_locs[tgt_idx] == (move_dir[0] + row, move_dir[1] + col):
+            islands[island_idx].append((move_dir[0] + row, move_dir[1] + col, tgt_idx, (2 - src_side + tgt_side - top) % 4))
+            matched_locs[tgt_idx] = (move_dir[0] + row, move_dir[1] + col)
         matching_pairs.remove(match)
     
     print(islands)
 
+    post_proc_tiles = {}
     for island in islands:
         for tile in island:
             row, col, tile_idx, top_side = tile
-            corners = tile_sides[tile_idx][top_side]
-            tile_up, _ = rotate(color_tiles[tile_idx], corners[1], top_side)
-            cv.imshow(f"{row}_{col}_{tile_idx}", tile_up)
-    cv.waitKey(0)
+            tile_up, rotated_sides = rotate_complete(color_tiles[tile_idx], tile_sides[tile_idx], top_side)
+            if tile_idx not in post_proc_tiles:
+                post_proc_tiles[tile_idx] = (tile_up, rotated_sides)
+
+    UP, RIGHT, DOWN, LEFT = 0, 1, 2, 3
+    def src_relevant_corner(sides, dir):
+        return sides[dir][0]
+    
+    def tgt_relevant_corner(sides, dir):
+        return sides[dir][1]
+
+
+    combined_tile_info = {}
+    relevant_island = sorted(islands[0], key=lambda x: (-x[0], x[1]))
+    anch, anch_sides = post_proc_tiles[relevant_island[0][2]]
+
+    def update_info(row, col, sides):
+        combined_tile_info[(row + 1, col)] = (src_relevant_corner(sides, UP), DOWN)
+        combined_tile_info[(row - 1, col)] = (src_relevant_corner(sides, DOWN), UP)
+        combined_tile_info[(row, col + 1)] = (src_relevant_corner(sides, RIGHT), LEFT)
+        combined_tile_info[(row, col - 1)] = (src_relevant_corner(sides, LEFT), RIGHT)
+
+    print(islands[0])
+    print(relevant_island)
+    combined_img = anch
+    update_info(relevant_island[0][0], relevant_island[0][1], anch_sides)
+    del relevant_island[0]
+    while len(relevant_island) > 0:
+        cv.imshow("cmb", combined_img)
+        cv.waitKey(0)
+        for i, tile in enumerate(relevant_island):
+            if (tile[0], tile[1]) in combined_tile_info:
+                print(tile)
+                corner, dir = combined_tile_info[(tile[0], tile[1])]
+                tgt, tgt_sides = post_proc_tiles[tile[2]]
+                tgt_corner = tgt_relevant_corner(tgt_sides, dir)
+                combined_img = combine_on_right_or_down(combined_img, corner[0], corner[1], tgt, tgt_corner[0], tgt_corner[1])
+                row_off = corner[0] - tgt_corner[0]
+                col_off = corner[1] - tgt_corner[1]
+                new_sides = []
+                for side in tgt_sides:
+                    new_sides.append((side[0] + row_off, side[1] + col_off))
+                update_info(tile[0], tile[1], new_sides)
+                del relevant_island[i]
+                break
+
 
     # for src_idx, src in enumerate(tiles):
     #     for tgt_idx, tgt in enumerate(tiles):
