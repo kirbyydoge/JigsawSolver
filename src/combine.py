@@ -368,11 +368,14 @@ if __name__ == "__main__":
                 col_off = corner[1] - tgt_corner[1]
                 new_sides = []
                 for side in tgt_sides:
-                    new_sides.append((side[0] + row_off, side[1] + col_off))
+                    l_side = (side[0][0] + row_off, side[0][1] + col_off)
+                    r_side = (side[1][0] + row_off, side[1][1] + col_off)
+                    new_sides.append((l_side, r_side))
                 update_info(tile[0], tile[1], new_sides)
                 del relevant_island[i]
                 break
-
+    cv.imshow("cmb", combined_img)
+    cv.waitKey(0)
 
     # for src_idx, src in enumerate(tiles):
     #     for tgt_idx, tgt in enumerate(tiles):
