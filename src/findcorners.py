@@ -90,11 +90,18 @@ def get_tiles(img, threshold=230):
 
     cv.drawContours(vis, contours, -1, (128,255,255), -1)
 
-    # cv.imshow("img", img)
-    # cv.imshow("grey", gray)
-    # cv.imshow("thresh", thresh)
-    # cv.imshow("contour", vis)
-    # cv.waitKey(0)
+    cv.imshow("img", img)
+    cv.waitKey(0)
+    cv.destroyAllWindows()
+    cv.imshow("grey", gray)
+    cv.waitKey(0)
+    cv.destroyAllWindows()
+    cv.imshow("thresh", thresh)
+    cv.waitKey(0)
+    cv.destroyAllWindows()
+    cv.imshow("contour", vis)
+    cv.waitKey(0)
+    cv.destroyAllWindows()
 
     # Parse pieces into tiles such that each tile only has 1 piece
     tiles = []
@@ -128,24 +135,22 @@ def get_corners(img, threshold=230):
             for j, _ in enumerate(row):
                 if (dst[i, j] > 0.05 * dst.max()):
                     corner_coords.append((i, j))
-                    # cv.circle(color, (j, i), 2, (0, 255, 0), -1)
-        # cv.imshow("Harris Corner", color)
-        # cv.waitKey(0)
-        # print(f"Num harris corners: {len(corner_coords)}")
+                    cv.circle(color, (j, i), 1, (0, 255, 0), -1)
+        cv.imshow(f"Harris Corner{idx}", color)
+        print(f"Num harris corners: {len(corner_coords)}")
 
         # Reduce search space by only picking maximal values in a centered window space
         local_max_coords = pick_local_maxima(corner_coords, dst, image.shape, FIND_MAX_WIDTH)
-        # for coord in local_max_coords:
-        #     cv.circle(color, (coord[1], coord[0]), 10, (0, 255, 0), -1)
-        # cv.imshow("Local Max", color)
-        # cv.waitKey(0)
-        # print(f"Num local maxima corners: {len(local_max_coords)}")
+        for coord in local_max_coords:
+            cv.circle(color, (coord[1], coord[0]), 10, (0, 255, 0), -1)
+        cv.imshow(f"Local Max{idx}", color)
+        print(f"Num local maxima corners: {len(local_max_coords)}")
 
         max_list = []
         center = bounding_box_center(local_max_coords)
         pivot = (center[0], center[1] + 10)
-        # cv.circle(color, (int(center[1]), int(center[0])), 5, (0, 255, 0), -1)
-        # cv.circle(color, (int(pivot[1]), int(pivot[0])), 5, (255, 0, 0), -1)
+        cv.circle(color, (int(center[1]), int(center[0])), 5, (0, 255, 0), -1)
+        cv.circle(color, (int(pivot[1]), int(pivot[0])), 5, (255, 0, 0), -1)
 
         # Heuristic: Divide candidate points into 8 subgroups
         groups = [[] for i in range(8)]
@@ -177,16 +182,18 @@ def get_corners(img, threshold=230):
                 cur_max = score
                 max_list = subset
         tile_corners.append(max_list)
+    cv.waitKey(0)
+    cv.destroyAllWindows()
     return tiles, tile_corners, color_tiles
 
 if __name__ == "__main__":
-    img = cv.imread("./res/kirbyytest.png")
+    img = cv.imread("./res/frogtest.png")
     tiles, tile_corners, color_tiles = get_corners(img)
     for i in range(len(tiles)):
-        # tile = cv.cvtColor(tiles[i], cv.COLOR_GRAY2BGR)
         tile = color_tiles[i]
         corners = tile_corners[i]
         for point in corners:
             cv.circle(tile, (point[1], point[0]), 10, (0, 0, 255), -1)
         cv.imshow(f"Tile{i}", tile)
     cv.waitKey(0)
+    cv.destroyAllWindows()

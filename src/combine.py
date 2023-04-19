@@ -249,14 +249,30 @@ def best_match(unmatched_sides, tile_sides, src_features, tgt_features, sim_func
     return best_pair
 
 if __name__ == "__main__":
-    img = cv.imread("./res/frogtest.png") # frogtest.png, 230 | kirbyytest.png, 240 | algorithm doesn't work on gothgirl.png
+    img = cv.imread("./res/frogtest.png") # frogtest.png, 230 | kirbyytest.png, 250 | algorithm doesn't work on gothgirl.png
     tiles, tile_corners, color_tiles = fc.get_corners(img, 230)
     tile_sides = []
+    for i in range(len(tiles)):
+        tile = color_tiles[i].copy()
+        corners = tile_corners[i]
+        for point in corners:
+            cv.circle(tile, (point[1], point[0]), 10, (0, 0, 255), -1)
+        cv.imshow(f"Tile{i}", tile)
+    cv.waitKey(0)
+    cv.destroyAllWindows()
+
     for i in range(len(tiles)):
         tile = cv.cvtColor(tiles[i], cv.COLOR_GRAY2BGR)
         corners = tile_corners[i]
         sides = get_sides(corners)
+        show = color_tiles[i].copy()
+        # show = tiles[i].copy() 
+        for side in sides:
+            show = cv.line(show, (side[0][1], side[0][0]), (side[1][1], side[1][0]), (127, 127, 0), 5)
+        cv.imshow(f"Edges{i}", show)
         tile_sides.append(sides)
+    cv.waitKey(0)
+    cv.destroyAllWindows()
 
     # Extract features of edges
     edge_dist_feats = []
@@ -345,12 +361,16 @@ if __name__ == "__main__":
         del matching_pairs[match_idx]
         src_idx, src_side = match[0] 
         tgt_idx, tgt_side = match[1]
+        combination = combine_vertical_color(color_tiles[src_idx], tile_sides[src_idx][src_side], src_side, color_tiles[tgt_idx], tile_sides[tgt_idx][tgt_side], tgt_side, thickness=100)
+        cv.imshow(f"Match{len(matching_pairs)}", combination)
         row, col, _, top = islands[island_idx][arr_idx]
         move_dir = rotate_point((1, 0), top - src_side, shape=(0, 0))
         if tgt_idx not in matched_locs: #; or matched_locs[tgt_idx] == (move_dir[0] + row, move_dir[1] + col):
             islands[island_idx].append((move_dir[0] + row, move_dir[1] + col, tgt_idx, (2 - src_side + tgt_side - top) % 4))
             matched_locs[tgt_idx] = (move_dir[0] + row, move_dir[1] + col)
-    
+    cv.waitKey(0)
+    cv.destroyAllWindows()
+
     print(islands)
 
     post_proc_tiles = {}
@@ -383,6 +403,9 @@ if __name__ == "__main__":
         update_info(relevant_island[0][0], relevant_island[0][1], anch_sides)
         del relevant_island[0]
         while len(relevant_island) > 0:
+            cv.imshow(f"cmb", combined_img)
+            cv.waitKey(0) 
+            cv.destroyAllWindows()
             for i, tile in enumerate(relevant_island):
                 if (tile[0], tile[1]) in combined_tile_info:
                     corner, dir = combined_tile_info[(tile[0], tile[1])]
