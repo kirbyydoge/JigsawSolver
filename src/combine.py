@@ -3,6 +3,7 @@ import cv2 as cv
 import numpy as np
 import math
 import itertools
+import os
 
 TILE_SRC_ANCHOR = 2
 TILE_TGT_ANCHOR = 0
@@ -63,7 +64,7 @@ def combine_vertical(tile_src, corner_src, side_src, tile_tgt, corner_tgt, side_
     return combined, ((combined > 128).sum() + (combined == 0).sum()) / (combined.shape[0] * combined.shape[1])
 
 def sample_color(tile, row, col, area=3):
-    sum_color = np.zeros_like(tile[0, 0])
+    sum_color = np.zeros_like(tile[0, 1])
     for i in range(area):
         row_idx = row + i - area//2
         if row_idx >= tile.shape[0] or row_idx < 0:
@@ -73,10 +74,10 @@ def sample_color(tile, row, col, area=3):
             if col_idx >= tile.shape[1] or col_idx < 0:
                 continue
             sum_color += tile[row_idx, col_idx]
-    return sum_color / (3 * 255 * area * area)
+    return sum_color / (area * area)
 
 
-def get_edge_features(tile_src, corners_src, n_parts=50):
+def get_edge_features(tile_src, corners_src, n_parts=100):
     histogram = np.zeros(n_parts)
     color_samples = np.zeros((n_parts, 3))
     start_point = corners_src[0]
@@ -152,7 +153,7 @@ def rotate(tile, corner, count):
 def rotate_point(corner, count, shape=(300, 300)):
     return new_pixel(corner[1], corner[0], (count % 4) * math.pi / 2, shape[1], shape[0])
 
-def is_flat_side(edge_dist_feat, thresh=20):
+def is_flat_side(edge_dist_feat, thresh=50):
     return np.absolute(edge_dist_feat - edge_dist_feat[0]).sum() < thresh
 
 def cosine_sim(vec0, vec1):
@@ -187,8 +188,30 @@ def combine_angle(corners_src, side_src, corners_tgt, side_tgt):
     # cv.imshow("edwn", end_down)
     # cv.waitKey(0)
     return fc.angle(endpoint_up, (0, 0), endpoint_down)
+
+def combine_on_left(anch, anch_row, anch_col, tgt, tgt_row, tgt_col):
+    row_len = anch.shape[0]
+    combined_img = anch.copy()
+    cmb_col = anch_col - tgt_col
+    col_off = 0
+    if tgt_col - anch_col > 0:
+        correction_left = np.zeros((row_len, tgt_col - anch_col, 3), np.uint8)
+        combined_img = np.concatenate((correction_left, anch), axis=1)
+        col_off = tgt_col - anch_col
+        cmb_col = 0
+    if anch_row + tgt.shape[0] - tgt_row > row_len:
+        correction_down = np.zeros((anch_row + tgt.shape[0] - tgt_row - row_len, combined_img.shape[1], 3), np.uint8)
+        combined_img = np.concatenate((combined_img, correction_down), axis=0)
+    cmb_row = anch_row - tgt_row
+    for i in range(tgt.shape[0]):
+        for j in range(tgt.shape[1]):
+            if sum(combined_img[cmb_row+i, cmb_col+j]) == 0:
+                combined_img[cmb_row+i, cmb_col+j] = tgt[i, j]
+            elif sum( tgt[i, j]) != 0:
+                combined_img[cmb_row+i, cmb_col+j] = (combined_img[cmb_row+i, cmb_col+j] + tgt[i, j]) / 2
+    return combined_img, (cmb_row, cmb_col), (0, col_off)
     
-def combine_on_right_or_down(anch, anch_row, anch_col, tgt, tgt_row, tgt_col):
+def combine_on_right(anch, anch_row, anch_col, tgt, tgt_row, tgt_col):
     row_len = max(anch_row + tgt.shape[0] - tgt_row, anch.shape[0])
     col_len = max(anch_col + tgt.shape[1] - tgt_col, anch.shape[1])
     combined_img = np.zeros((row_len, col_len, 3), np.uint8)
@@ -201,11 +224,11 @@ def combine_on_right_or_down(anch, anch_row, anch_col, tgt, tgt_row, tgt_col):
                 combined_img[cmb_row+i, cmb_col+j] = tgt[i, j]
             elif sum( tgt[i, j]) != 0:
                 combined_img[cmb_row+i, cmb_col+j] = (combined_img[cmb_row+i, cmb_col+j] + tgt[i, j]) / 2
-    return combined_img
+    return combined_img, (cmb_row, cmb_col), (0, 0)
 
 SIM_INCREASING = 1
 SIM_DECREASING = 0
-def best_match(unmatched_sides, tile_sides, src_features, tgt_features, sim_func=dot_sim, similarity=SIM_INCREASING):
+def best_match(unmatched_sides, tile_sides, src_features, tgt_features, sim_func=cosine_sim, similarity=SIM_INCREASING):
     best_score = -1e10 if similarity == SIM_INCREASING else 1e10
     best_pair = None
     for src_idx, src_side in unmatched_sides:
@@ -214,7 +237,7 @@ def best_match(unmatched_sides, tile_sides, src_features, tgt_features, sim_func
                 continue
             if abs(side_len(tile_sides[src_idx][src_side]) - side_len(tile_sides[tgt_idx][tgt_side])) > 5:
                 continue
-            if combine_angle(tile_sides[src_idx][src_side], src_side, tile_sides[tgt_idx][tgt_side], tgt_side) > 2:
+            if combine_angle(tile_sides[src_idx][src_side], src_side, tile_sides[tgt_idx][tgt_side], tgt_side) > 3:
                 continue
             cur_score = sim_func(src_features[src_idx][src_side], tgt_features[tgt_idx][tgt_side])
             if similarity == SIM_INCREASING and cur_score > best_score:
@@ -226,8 +249,8 @@ def best_match(unmatched_sides, tile_sides, src_features, tgt_features, sim_func
     return best_pair
 
 if __name__ == "__main__":
-    img = cv.imread("./res/test0_sample0.png")
-    tiles, tile_corners, color_tiles = fc.get_corners(img)
+    img = cv.imread("./res/frogtest.png") # frogtest.png, 230 | kirbyytest.png, 240 | algorithm doesn't work on gothgirl.png
+    tiles, tile_corners, color_tiles = fc.get_corners(img, 230)
     tile_sides = []
     for i in range(len(tiles)):
         tile = cv.cvtColor(tiles[i], cv.COLOR_GRAY2BGR)
@@ -266,9 +289,12 @@ if __name__ == "__main__":
             src_edge_vec = src_edge_vec - src_edge_vec[0]
             tgt_edge_vec = -np.flip(edge_dist_feats[src_idx][src_side])
             tgt_edge_vec = tgt_edge_vec - tgt_edge_vec[0]
-            src_color_vec =  edge_color_feats[src_idx][src_side].flatten()
+            src_color_vec = edge_color_feats[src_idx][src_side].flatten()
+            tgt_color_vec = np.flip(edge_color_feats[src_idx][src_side].flatten())
+            # src_side_embeds.append(src_edge_vec)
+            # tgt_side_embeds.append(tgt_edge_vec)
             src_side_embeds.append(np.concatenate((src_edge_vec, src_color_vec)))
-            tgt_side_embeds.append(np.concatenate((tgt_edge_vec, src_color_vec)))
+            tgt_side_embeds.append(np.concatenate((tgt_edge_vec, tgt_color_vec)))
         src_embeds.append(src_side_embeds)
         tgt_embeds.append(tgt_side_embeds)
 
@@ -281,14 +307,16 @@ if __name__ == "__main__":
 
     # Find matching pairs
     matching_pairs = []
-    while len(unmatched_tile_sides):
+    while len(unmatched_tile_sides) > 0:
         match = best_match(unmatched_tile_sides, tile_sides, src_embeds, tgt_embeds)
         if not match:
             break
         src_idx, src_side = match[0]
         tgt_idx, tgt_side = match[1]
         src, tgt = color_tiles[src_idx], color_tiles[tgt_idx]
-        combination = combine_vertical_color(src, tile_sides[src_idx][src_side], src_side, tgt, tile_sides[tgt_idx][tgt_side], tgt_side, thickness=100)
+        # combination = combine_vertical_color(src, tile_sides[src_idx][src_side], src_side, tgt, tile_sides[tgt_idx][tgt_side], tgt_side, thickness=100)
+        # cv.imshow("cur_best", combination)
+        # cv.waitKey(0)
         unmatched_tile_sides.remove(match[0])
         unmatched_tile_sides.remove(match[1])
         matching_pairs.append(match)
@@ -299,27 +327,29 @@ if __name__ == "__main__":
     
     islands = []
 
+    matched_locs = {}
     def locate_next_match():
         for island_idx, island in enumerate(islands):
             for i, tile_info in enumerate(island):
                 _, _, tile_idx, _ = tile_info
-                for match in matching_pairs:
+                for j, match in enumerate(matching_pairs):
                     if tile_idx == match[0][0]:
-                        return island_idx, i, match
+                        return island_idx, i, match, j
+                    if tile_idx == match[1][0]:
+                        return island_idx, i, (match[1], match[0]), j
         islands.append([(0, 0, matching_pairs[0][0][0], 0)])
-        return len(islands)-1, 0, matching_pairs[0]
-
-    matched_locs = {}
+        return len(islands)-1, 0, matching_pairs[0], 0
+    
     while len(matching_pairs) > 0:
-        island_idx, arr_idx, match = locate_next_match()
-        src_idx, src_side = match[0]
+        island_idx, arr_idx, match, match_idx  = locate_next_match()
+        del matching_pairs[match_idx]
+        src_idx, src_side = match[0] 
         tgt_idx, tgt_side = match[1]
         row, col, _, top = islands[island_idx][arr_idx]
         move_dir = rotate_point((1, 0), top - src_side, shape=(0, 0))
-        if tgt_idx not in matched_locs or matched_locs[tgt_idx] == (move_dir[0] + row, move_dir[1] + col):
+        if tgt_idx not in matched_locs: #; or matched_locs[tgt_idx] == (move_dir[0] + row, move_dir[1] + col):
             islands[island_idx].append((move_dir[0] + row, move_dir[1] + col, tgt_idx, (2 - src_side + tgt_side - top) % 4))
             matched_locs[tgt_idx] = (move_dir[0] + row, move_dir[1] + col)
-        matching_pairs.remove(match)
     
     print(islands)
 
@@ -338,45 +368,50 @@ if __name__ == "__main__":
     def tgt_relevant_corner(sides, dir):
         return sides[dir][1]
 
+    def combine_island(idx):
+        combined_tile_info = {}
+        def update_info(row, col, sides):
+            combined_tile_info[(row + 1, col)] = (src_relevant_corner(sides, UP), DOWN)
+            combined_tile_info[(row - 1, col)] = (src_relevant_corner(sides, DOWN), UP)
+            combined_tile_info[(row, col + 1)] = (src_relevant_corner(sides, RIGHT), LEFT)
+            combined_tile_info[(row, col - 1)] = (src_relevant_corner(sides, LEFT), RIGHT)
 
-    combined_tile_info = {}
-    relevant_island = sorted(islands[0], key=lambda x: (-x[0], x[1]))
-    anch, anch_sides = post_proc_tiles[relevant_island[0][2]]
+        relevant_island = sorted(islands[idx], key=lambda x: (-x[0], x[1]))
+        anch, anch_sides = post_proc_tiles[relevant_island[0][2]]
 
-    def update_info(row, col, sides):
-        combined_tile_info[(row + 1, col)] = (src_relevant_corner(sides, UP), DOWN)
-        combined_tile_info[(row - 1, col)] = (src_relevant_corner(sides, DOWN), UP)
-        combined_tile_info[(row, col + 1)] = (src_relevant_corner(sides, RIGHT), LEFT)
-        combined_tile_info[(row, col - 1)] = (src_relevant_corner(sides, LEFT), RIGHT)
+        combined_img = anch
+        update_info(relevant_island[0][0], relevant_island[0][1], anch_sides)
+        del relevant_island[0]
+        while len(relevant_island) > 0:
+            for i, tile in enumerate(relevant_island):
+                if (tile[0], tile[1]) in combined_tile_info:
+                    corner, dir = combined_tile_info[(tile[0], tile[1])]
+                    tgt, tgt_sides = post_proc_tiles[tile[2]]
+                    tgt_corner = tgt_relevant_corner(tgt_sides, dir)
+                    if dir == RIGHT:
+                        combined_img, tgt_correct, anch_correct = combine_on_left(combined_img, corner[0], corner[1], tgt, tgt_corner[0], tgt_corner[1])
+                    else:
+                        combined_img, tgt_correct, anch_correct = combine_on_right(combined_img, corner[0], corner[1], tgt, tgt_corner[0], tgt_corner[1])
+                    for key in combined_tile_info:
+                        corner, side = combined_tile_info[key]
+                        new_corner = (corner[0] + anch_correct[0], corner[1] + anch_correct[1])
+                        combined_tile_info[key] = (new_corner, side)
+                    new_sides = []
+                    for side in tgt_sides:
+                        l_side = (side[0][0] + tgt_correct[0], side[0][1] + tgt_correct[1])
+                        r_side = (side[1][0] + tgt_correct[0], side[1][1] + tgt_correct[1])
+                        new_sides.append((l_side, r_side))
+                    update_info(tile[0], tile[1], new_sides)
+                    del relevant_island[i]
+                    break
+        return combined_img
 
-    print(islands[0])
-    print(relevant_island)
-    combined_img = anch
-    update_info(relevant_island[0][0], relevant_island[0][1], anch_sides)
-    del relevant_island[0]
-    while len(relevant_island) > 0:
-        cv.imshow("cmb", combined_img)
-        cv.waitKey(0)
-        for i, tile in enumerate(relevant_island):
-            if (tile[0], tile[1]) in combined_tile_info:
-                print(tile)
-                corner, dir = combined_tile_info[(tile[0], tile[1])]
-                tgt, tgt_sides = post_proc_tiles[tile[2]]
-                tgt_corner = tgt_relevant_corner(tgt_sides, dir)
-                combined_img = combine_on_right_or_down(combined_img, corner[0], corner[1], tgt, tgt_corner[0], tgt_corner[1])
-                row_off = corner[0] - tgt_corner[0]
-                col_off = corner[1] - tgt_corner[1]
-                new_sides = []
-                for side in tgt_sides:
-                    l_side = (side[0][0] + row_off, side[0][1] + col_off)
-                    r_side = (side[1][0] + row_off, side[1][1] + col_off)
-                    new_sides.append((l_side, r_side))
-                update_info(tile[0], tile[1], new_sides)
-                del relevant_island[i]
-                break
-    cv.imshow("cmb", combined_img)
+    for i in range(len(islands)):
+        cmb = combine_island(i)
+        cv.imshow(f"cmb{i}", cmb)
     cv.waitKey(0)
-
+    cv.destroyAllWindows()
+    
     # for src_idx, src in enumerate(tiles):
     #     for tgt_idx, tgt in enumerate(tiles):
     #         if src_idx == tgt_idx:
